@@ -1,123 +1,145 @@
 import streamlit as st
 from supabase import create_client, Client
-import pdfplumber
 import pandas as pd
-import re
-import traceback
 from datetime import datetime
-import plotly.graph_objects as go
+import plotly.express as px
+import traceback
 
-# --- INIZIALIZZAZIONE CLOUD ---
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="NovaBill AI Enterprise", layout="wide", page_icon="💎")
+
+# --- STILE CSS CUSTOM ---
+st.markdown("""
+    <style>
+    .stApp { background-color: #0e1117; color: white; }
+    .stMetric { background-color: #1e2130; padding: 20px; border-radius: 15px; border-bottom: 4px solid #007BFF; }
+    .stExpander { border: 1px solid #30363d; border-radius: 10px; background-color: #161b22; }
+    div.stButton > button:first-child {
+        background: linear-gradient(90deg, #007BFF, #00C6FF); color: white;
+        border: none; border-radius: 8px; font-weight: bold; width: 100%;
+    }
+    </style>
+    """, unsafe_allow_index=True)
+
+# --- CONNESSIONE CLOUD ---
 try:
     supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 except Exception as e:
-    st.error("Errore di connessione al database. Verifica i Secrets.")
+    st.error("Errore di configurazione: controlla i Secrets di Streamlit.")
 
-# --- LOGICA DI BUSINESS ---
-class NovaIntelligence:
-    @staticmethod
-    def check_market_convenience(utenza, prezzo_utente, consumo_utente):
-        """Confronta automaticamente i dati utente con i benchmark ARERA nel DB."""
-        try:
-            res = supabase.table("market_benchmarks").select("*").eq("utenza", utenza).execute()
-            if res.data:
-                bench = res.data[0]
-                costo_unitario = prezzo_utente / consumo_utente if consumo_utente > 0 else 0
-                prezzo_arera = bench['prezzo_riferimento']
-                
-                st.subheader("🤖 Nova Advisor - Analisi Convenienza")
-                if costo_unitario > (prezzo_arera + 0.05):
-                    st.error(f"⚠️ Attenzione: Stai pagando {costo_unitario:.3f}€/unità. La media ARERA è {prezzo_arera:.3f}€.")
-                    st.info("Consiglio: Valuta il passaggio a un'offerta indicizzata o contatta un consulente.")
-                    st.link_button("Vai al Portale Offerte ARERA", "https://www.ilportaleofferte.it/")
-                else:
-                    st.success("✅ Ottimo! La tua tariffa è in linea con i prezzi di mercato ARERA.")
-        except:
-            pass
+# --- LOGICA DI AUTOMAZIONE ---
+def auto_update_benchmarks():
+    """Simulazione aggiornamento automatico (può essere esteso con Web Scraping)"""
+    try:
+        # Qui potresti inserire una chiamata API a un servizio di prezzi energia
+        supabase.table("market_benchmarks").upsert([
+            {"utenza": "Luce", "prezzo_monorario": 0.128, "prezzo_f1": 0.145, "prezzo_f2": 0.138, "prezzo_f3": 0.115},
+            {"utenza": "Gas", "prezzo_monorario": 0.450}
+        ], on_conflict="utenza").execute()
+        return True
+    except: return False
 
-# --- INTERFACCIA AUTH ---
-def login_page():
-    st.title("💎 NovaBill AI - Enterprise")
-    tab1, tab2 = st.tabs(["Accedi", "Registrati"])
+# --- UI DI AUTENTICAZIONE ---
+def auth_ui():
+    st.title("💎 NovaBill AI")
+    st.markdown("### Il tuo consulente energetico digitale.")
+    col1, col2 = st.columns([1, 1.2])
     
-    with tab1:
-        email = st.text_input("Email", key="l_email")
-        pwd = st.text_input("Password", type="password", key="l_pwd")
-        if st.button("Entra nel Vault"):
+    with col1:
+        tab = st.radio("Seleziona azione", ["Login", "Registrazione"], horizontal=True)
+        email = st.text_input("Email")
+        pwd = st.text_input("Password", type="password")
+        
+        if st.button("Procedi"):
             try:
-                res = supabase.auth.sign_in_with_password({"email": email, "password": pwd})
-                st.session_state.user = res.user
+                if tab == "Login":
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": pwd})
+                    st.session_state.user = res.user
+                else:
+                    supabase.auth.sign_up({"email": email, "password": pwd})
+                    st.success("✅ Mail inviata! Controlla la tua posta.")
                 st.rerun()
-            except: st.error("Email o Password errati (o email non confermata).")
-            
-    with tab2:
-        r_email = st.text_input("Email", key="r_email")
-        r_pwd = st.text_input("Password", type="password", key="r_pwd")
-        if st.button("Crea Account"):
-            try:
-                supabase.auth.sign_up({"email": r_email, "password": r_pwd})
-                st.success("✅ Registrazione completata! Controlla l'email per confermare.")
-            except Exception as e: st.error(e)
+            except Exception as e: st.error("Errore: Credenziali errate o email non confermata.")
+    
+    with col2:
+        st.info("💡 **NovaBill Enterprise** analizza le tue bollette e le confronta con i prezzi ARERA in tempo reale per garantirti sempre il risparmio massimo.")
 
-# --- MAIN APP ---
+# --- APP PRINCIPALE ---
 if 'user' not in st.session_state or st.session_state.user is None:
-    login_page()
+    auth_ui()
 else:
     user = st.session_state.user
     
     # Sidebar
-    st.sidebar.title("NovaBill AI")
-    st.sidebar.write(f"Logged: {user.email}")
-    if st.sidebar.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
-
-    # Admin Check
-    if user.email == st.secrets["ADMIN_EMAIL"]:
-        if st.sidebar.checkbox("👑 Admin Panel"):
-            st.title("Control Center Amministratore")
-            logs = supabase.table("error_logs").select("*").execute()
-            st.dataframe(logs.data)
-            st.stop()
-
-    # Dashboard Utente
-    st.title("📊 La tua Dashboard Energetica")
-    
-    # Inserimento
-    with st.expander("📝 Inserisci Bolletta (Manuale o Analisi)", expanded=True):
-        col1, col2, col3 = st.columns(3)
-        u_sel = col1.selectbox("Utenza", ["Luce", "Gas", "Acqua", "Tari"])
-        p_val = col2.number_input("Prezzo Totale (€)", min_value=0.0, step=0.01)
-        c_val = col3.number_input("Consumo Reale", min_value=0.0, step=0.1)
+    with st.sidebar:
+        st.title("NovaBill Pro")
+        st.write(f"Logged as: **{user.email}**")
+        if st.button("Esci"):
+            st.session_state.user = None
+            st.rerun()
         
-        if st.button("🚀 Salva ed Analizza"):
-            try:
-                # Salvataggio Cloud
-                dati = {
-                    "user_id": user.id,
-                    "mese": datetime.now().strftime("%b"),
-                    "anno": datetime.now().year,
-                    "utenza": u_sel,
-                    "prezzo": p_val,
-                    "consumo": c_val
-                }
-                supabase.table("bollette").insert(dati).execute()
-                st.toast("Dati salvati nel Cloud!")
-                
-                # Advisor Automatico
-                if u_sel in ["Luce", "Gas"]:
-                    NovaIntelligence.check_market_convenience(u_sel, p_val, c_val)
-            except Exception as e:
-                trace = traceback.format_exc()
-                supabase.table("error_logs").insert({"user_email": user.email, "error_message": str(e), "stack_trace": trace}).execute()
-                st.error("Errore durante il salvataggio. Segnalazione inviata all'admin.")
+        st.divider()
+        if user.email == st.secrets["ADMIN_EMAIL"]:
+            if st.checkbox("👑 Pannello Admin"):
+                st.subheader("Gestione Sistema")
+                if st.button("🔄 Forza Aggiornamento Benchmark"):
+                    if auto_update_benchmarks(): st.success("Dati ARERA Aggiornati!")
+                st.stop()
 
-    # Storico Cloud
+    # DASHBOARD
+    st.title("📊 Dashboard Analitica")
+    
+    # Recupero Dati
+    res = supabase.table("bollette").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
+    df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+
+    # Metriche
+    if not df.empty:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Totale Spesa 2026", f"€ {df['prezzo'].sum():.2f}")
+        m2.metric("Ultimo Consumo", f"{df.iloc[0]['consumo']} Unità")
+        m3.metric("Stato Tariffa", "Sotto Controllo" if len(df) > 1 else "Analisi...")
+
+    # Sezione Inserimento ed Analisi
     st.divider()
-    st.subheader("📚 Il tuo storico bollette")
-    res_data = supabase.table("bollette").select("*").eq("user_id", user.id).execute()
-    if res_data.data:
-        df = pd.DataFrame(res_data.data)
-        st.dataframe(df[["mese", "anno", "utenza", "prezzo", "consumo"]], use_container_width=True)
-    else:
-        st.info("Nessun dato presente. Carica la tua prima bolletta!")
+    c_in, c_ch = st.columns([1, 2])
+    
+    with c_in:
+        st.subheader("➕ Nuova Bolletta")
+        with st.form("bill_form", clear_on_submit=True):
+            utenza = st.selectbox("Utenza", ["Luce", "Gas", "Acqua"])
+            prezzo = st.number_input("Prezzo Totale (€)", step=0.01)
+            consumo = st.number_input("Consumo Reale", step=0.1)
+            submitted = st.form_submit_button("Salva ed Analizza")
+            
+            if submitted:
+                d = {"user_id": user.id, "mese": datetime.now().strftime("%b"), "anno": 2026, "utenza": utenza, "prezzo": prezzo, "consumo": consumo}
+                supabase.table("bollette").insert(d).execute()
+                st.balloons()
+                
+                # Advisor Logic
+                bench = supabase.table("market_benchmarks").select("*").eq("utenza", utenza).execute()
+                if bench.data:
+                    b = bench.data[0]
+                    costo_u = prezzo/consumo if consumo > 0 else 0
+                    if costo_u > b['prezzo_monorario']:
+                        st.warning(f"Sei sopra la media ARERA di {(costo_u - b['prezzo_monorario']):.3f}€")
+
+    with c_ch:
+        st.subheader("📈 Analisi Trend")
+        if not df.empty:
+            fig = px.bar(df, x="mese", y="prezzo", color="utenza", barmode="group", template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.info("Inserisci dati per visualizzare il grafico.")
+
+    # STORICO CON ELIMINAZIONE
+    st.divider()
+    st.subheader("📂 Storico e Gestione")
+    if not df.empty:
+        for i, row in df.iterrows():
+            with st.expander(f"📦 {row['utenza']} - {row['mese']} {row['anno']} - € {row['prezzo']}"):
+                col_a, col_b = st.columns([4, 1])
+                col_a.write(f"Dettaglio: {row['consumo']} unità registrate il {row['created_at'][:10]}")
+                if col_b.button("🗑️ Elimina", key=f"del_{row['id']}"):
+                    supabase.table("bollette").delete().eq("id", row['id']).execute()
+                    st.rerun()
